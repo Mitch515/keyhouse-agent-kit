@@ -1,0 +1,21 @@
+# Keyhouse agent kit
+
+> Connect a project using names-only discovery, locally sealed imports and scoped agent access.
+
+## Guides
+
+- [base-url](docs/methods/base-url.md)
+- [run](docs/methods/run.md)
+- [custom-api](docs/methods/custom-api.md)
+- [short-lived](docs/methods/short-lived.md)
+- [track-rotate](docs/methods/track-rotate.md)
+- [railway](docs/hosts/railway.md)
+- [local](docs/hosts/local.md)
+- [docker](docs/hosts/docker.md)
+- [fly](docs/hosts/fly.md)
+- [render](docs/hosts/render.md)
+- [vercel](docs/hosts/vercel.md)
+- [cloudflare](docs/hosts/cloudflare.md)
+- [github-actions](docs/hosts/github-actions.md)
+- [netlify](docs/hosts/netlify.md)
+- [heroku](docs/hosts/heroku.md)

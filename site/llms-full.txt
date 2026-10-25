@@ -1,0 +1,245 @@
+# Keyhouse agent kit
+> Connect a project using names-only discovery, locally sealed imports and scoped agent access.
+## Guides
+- [base-url](docs/methods/base-url.md)
+- [run](docs/methods/run.md)
+- [custom-api](docs/methods/custom-api.md)
+- [short-lived](docs/methods/short-lived.md)
+- [track-rotate](docs/methods/track-rotate.md)
+- [railway](docs/hosts/railway.md)
+- [local](docs/hosts/local.md)
+- [docker](docs/hosts/docker.md)
+- [fly](docs/hosts/fly.md)
+- [render](docs/hosts/render.md)
+- [vercel](docs/hosts/vercel.md)
+- [cloudflare](docs/hosts/cloudflare.md)
+- [github-actions](docs/hosts/github-actions.md)
+- [netlify](docs/hosts/netlify.md)
+- [heroku](docs/hosts/heroku.md)
+# Change the base URL
+Use this when the SDK accepts a base URL or a hostname. Read its `sdks` entry first: `env` lists variables the SDK reads itself; `configuration` lists variables your application must pass explicitly. Paths differ between SDKs.
+For OpenAI, set `OPENAI_API_KEY=<proxy-key>` and `OPENAI_BASE_URL=https://<gateway>/openai/v1`. Keep `new OpenAI()`.
+For Anthropic, set `ANTHROPIC_API_KEY=<proxy-key>` and `ANTHROPIC_BASE_URL=https://<gateway>/anthropic`. Its generated requests already include `/v1`. Groq likewise appends `/openai/v1`; set `GROQ_BASE_URL=https://<gateway>/groq`.
+For Stripe, use a hostname gateway. Set `STRIPE_SECRET_KEY=<proxy-key>` and `STRIPE_HOST=stripe.<gateway-domain>`. Change construction to `new Stripe(process.env.STRIPE_SECRET_KEY, {host: process.env.STRIPE_HOST})`. Do not put a scheme, port or path in `host`. A local path gateway cannot replace this hostname.
+For other SDKs, use the catalogue snippet and its constructor option. Keep each variable on the server, including server-only environment scopes on the host. Never expose a key through a browser build prefix.
+Run the application's smallest integration path, then `keyhouse verify`. When `connect.verify` exists, confirm a request for this key, an upstream success and the expected placement. A set variable alone does not prove traffic passed through Keyhouse.
+Tell the person which service changed, which gateway it uses and what request proved it. Ask them to rotate the real key that previously lived on the host using the normal rotation authorization.
+# Run through a local relay
+Use this for a client that honors proxy variables but lacks a usable base URL, on a host with a long-running start command. It does not work inside Vercel or Netlify functions or Cloudflare Workers.
+Change the start command to `keyhouse run -- node server.js`, replacing `node server.js` with the application's actual command. Replace the application's API credential with its Keyhouse proxy key. Keep public account identifiers such as `TWILIO_ACCOUNT_SID`. Load those environment variables before starting the command.
+In `keyhouse.json`, map the app's API services under `services`, for example `{"variable":"TWILIO_AUTH_TOKEN","provider":"twilio"}`. Run `keyhouse init` or `keyhouse login` first. The CLI discovers the gateway origin through that authenticated saved connection and pins it in private CLI config. It prints the chosen gateway origin at startup. A differing `KEYHOUSE_PROXY_URL` or project `proxyUrl` is refused. Use `keyhouse run --replace -- <command>` only when you intend to replace the saved gateway with that reviewed origin. The gateway address has no provider path and differs from the dashboard `baseUrl`. HTTPS is required except on loopback, using the same trusted-origin rules as init and login.
+Catalogue hosts come from these service mappings. For an approved custom destination, use `d-<publicId>` as its provider. The CLI checks the server's destination metadata using its saved connection before starting; an unapproved or revoked destination is refused. All runs require the saved CLI connection at startup. Tracked database and webhook secrets are not intercepted.
+The relay listens only on `127.0.0.1`, using a random port and a new 128-bit password per run. Its proxy URL contains this credential; every HTTP or CONNECT proxy request requires it and missing or incorrect credentials receive 407. Treat the child's proxy environment as private. It sets `HTTP_PROXY`, `HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and `TWILIO_CA_BUNDLE` for the command. Twilio Node reads `HTTP_PROXY`; setting only `HTTPS_PROXY` does not route that SDK. The relay preserves inherited `NO_PROXY` entries and adds loopback names, removing entries that match registered services, including broad suffixes and wildcards. Both uppercase and lowercase proxy variables are set.
+Every start creates a fresh CA whose signing key stays non-exportable in memory. X.509 constraints permit only registered DNS names, exclude their subdomains and exclude IP addresses. Overlapping parent/child host registrations are refused. The CA and leaves are valid for one year; restart commands that run longer. A private temporary directory contains only a public trust bundle, retaining Node public roots, system roots and inherited public CA bundles. Normal exit or a handled signal removes it. A forced kill or machine failure can leave the public file behind, but no CA signing key. Never install a global CA or weaken TLS verification.
+For registered hosts on port 443, the relay terminates TLS and forwards to the gateway's provider or destination path. Proxy keys stay placeholders until the gateway swaps them. Other CONNECT streams pass directly to their target without TLS inspection. One trailing dot is removed before host lookup. Registered hosts on other ports are refused. Plain HTTP requests to unregistered hosts are forwarded with their method, path, body and end-to-end headers; registered hosts are refused over plaintext HTTP so a placeholder cannot leak. The command stays attached to its terminal. The wrapper forwards termination signals to the child pid and mirrors its exit status.
+Verify with the application's smallest harmless integration request, then check Keyhouse usage for the same service. Confirm unrelated HTTPS still presents its original server certificate and that stopping the command removes its temporary trust file. Node 24's HTTPS client and Twilio's Basic `AccountSid:AuthToken` request shape are covered by the relay journey. Node, Python and Go certificate verification are checked separately; that does not establish every Python or Go HTTP library's proxy behavior. Java and certificate-pinning clients need their own integration; prefer a base URL when available.
+Twilio's account auth token also signs inbound webhooks. Prefer a Twilio API key and secret for outbound calls, leaving webhook verification tracked separately.
+On macOS, Go may use the system Security framework instead of `SSL_CERT_FILE`, so the temporary bundle alone may not establish trust for Go clients there. Prefer a base URL for that case; never install this per-run CA globally. The Linux certificate rail requires Python and Go in CI and checks DNS, wildcard and IP forgeries.
+Known follow-ups:
+- Only Twilio's catalogue host `api.twilio.com` is registered. Product hosts such as `verify.twilio.com`, `conversations.twilio.com` and `lookups.twilio.com` need explicit catalogue registration before relay use.
+- Windows `.cmd` command spawning is unsupported. Use a directly executable command; Windows process and terminal behavior is not verified.
+- Twilio's declared Basic slot currently permits a placeholder beyond the password position. The gateway still sends the real token only to `api.twilio.com`; narrowing the slot to the password is a separate follow-up.
+# Connect an uncatalogued API
+Use this when the service has no catalogue entry. Discover the hostname from code and variable names with `keyhouse scan --json`. Never inspect or paste the real value into a model prompt.
+Before any credential goes there, call `destinations.check` for the exact host when that action is available. A person must approve an unknown destination. During signup the destination may be part of the account-creation page. Follow its approval result; an agent cannot change the allowed host or approve it itself.
+For a raw HTTP client, add an application variable such as `ACME_CRM_BASE_URL` and use `fetch(process.env.ACME_CRM_BASE_URL + '/v2/contacts', {headers: {'X-Api-Key': process.env.ACME_CRM_API_KEY}})`. Set the base URL without a trailing slash to the approved destination gateway and the key to the returned `kh_` key. Preserve the API's actual path and header, query or Basic auth format. Path/body credentials require explicit destination opt-in; signing recipes require catalogue review.
+For values the automatic classifier cannot recognize, stop and report the missing classification. Never guess that one provider's shape belongs to another. The current CLI imports catalogue API credentials only; the unknown-destination workflow and `connect.*` arrive in follow-up work.
+Exercise the application's integration path after approval, then confirm Keyhouse usage and the exact approved upstream hostname. A refused destination must receive no credential.
+Tell the person the exact host to approve and what the key will permit. Report pending approval or unavailable server actions honestly, and carry on only with independent approved services.
+# Prefer short-lived credentials when supported
+Use this when a provider offers workload identity federation or a token minting flow. It needs a reviewed provider-specific integration; possession of a proxy key does not make a token exchange available.
+No general token exchange is implemented by this CLI. Do not invent an endpoint, audience or scope. Until the reviewed integration exists, use the service's base-URL method or report that it cannot be connected yet.
+For an implemented exchange, replace the application's long-lived secret read with the provider SDK's credential callback. That callback fetches a token from the reviewed Keyhouse action, caches only until its returned expiry, and refreshes before expiry. Keep `KEYHOUSE_URL` and the scoped application proxy key in server-only configuration; the developer's `kh_agent_` token belongs only in the CLI's private config and never in the deployed app.
+Verify a successful request, expiry and renewal using the provider's documented lifetime. Check the audience and scopes, and confirm an expired token is refused. Never print the token as evidence.
+Tell the person how long a stolen token would remain usable, which service and scopes it reaches, and whether renewal has actually been demonstrated. Do not claim a long-lived secret has left the host until it has been removed and rotated.
+# Track a secret and rotate it
+Use this for database URLs, SMTP passwords, webhook signing secrets and other credentials that cannot be replaced by an HTTP proxy key. The catalogue has explicit `STRIPE_WEBHOOK_SECRET` and `DATABASE_URL` entries.
+Keep the real value in the host's secret store. Keep `stripe.webhooks.constructEvent(rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET)` and `new Pool({connectionString: process.env.DATABASE_URL})`. Neither variable becomes a `kh_` value. Do not send database TCP traffic through an HTTP gateway or substitute a fake webhook verification key.
+Record the app, variable name, host and rotation procedure as a tracked placement when `connect.apply` supports it. The current CLI recognizes these types during scan but does not upload them as API credentials. Its verify command reports that tracked placement verification is unavailable until the server supports it.
+Rotate through the provider using the normal grant or person approval, update every placement and restart or redeploy the app. Railway is the only current host connector. Elsewhere the agent must update the host again; recording a placement does not grant Keyhouse write access.
+Verify a real database health request or webhook verification without logging the value. Coordinate signing-secret overlap and database connection recycling using the provider's documented procedure.
+Tell the person that the real secret stays on the host and is exposed if the host is breached. State where it is recorded and who will perform the next rotation. Never claim this method gives proxy isolation.
+# Railway
+Railway is the only host with a Keyhouse connector. `keyhouse connect railway --project <project-id>` seals the local Railway token to the connectors public key. The connector can import, write replacement variables, redeploy and rotate later within the authorized scope. Prefer that connector to reading host values into an agent.
+With an already linked Railway CLI, the fallback variable command is `railway variable set OPENAI_API_KEY=<proxy-key> OPENAI_BASE_URL=<gateway-url> --service <service> --environment <environment> --skip-deploys`. Select the right project first. The explicit `--skip-deploys` prevents the variable write from deploying before all changes are ready; deploy with `railway up --service <service> --environment <environment>` and verify that exact environment.
+Set the service's start command in Settings, Deploy, Start Command, or set `deploy.startCommand` in `railway.toml`. Use the application's real command. A future relay can use `keyhouse run -- node server.js`; it fits Railway's process model but the CLI relay is not built yet.
+Never run variable dumps, CLI JSON inventory or verbose HTTP tracing that exposes existing values. Discard mutation responses if they echo values. Observe deployments through status and metadata. Exercise the integration and check Keyhouse usage before declaring success.
+Checked 2026-10-23: [CLI variable](https://docs.railway.com/cli/variable), [up](https://docs.railway.com/cli/up), [start command](https://docs.railway.com/guides/start-command), [config as code](https://docs.railway.com/reference/config-as-code).
+# Local environment files
+There is no host connector. The agent updates the local `.env` and records its placement when the server supports placements. Future rotation requires another local edit.
+Use a local file-editing process to set `OPENAI_API_KEY=<proxy-key>` and `OPENAI_BASE_URL=<gateway-url>` in `.env`, without reading its current values into chat. Keep the file ignored by Git and mode 0600. Do not use `cat .env`, shell tracing or a command that echoes every variable.
+Start Node 24 with `node --env-file=.env server.js`, or retain the project's existing environment loader. Change the package start script if needed. Restart the owned process to pick up changes; there is no deployment command. A future start command can be `keyhouse run -- node --env-file=.env server.js`, but the relay is not built yet.
+Run the integration request, then `keyhouse verify`. Check only variable names and verification results. Keep tracked secrets such as database URLs unchanged until an authorized rotation is ready.
+Checked 2026-10-23: [Node --env-file](https://nodejs.org/api/cli.html#--env-filefile), [npm scripts](https://docs.npmjs.com/cli/v11/using-npm/scripts).
+# Docker Compose
+There is no connector. The agent edits the ignored `.env` used by Compose and declares the placement. Later rotation needs another edit and container recreation.
+Set `OPENAI_API_KEY=<proxy-key>` and `OPENAI_BASE_URL=<gateway-url>` in the local ignored environment file using a process that never prints existing values. In Compose set `env_file: .env`, or explicitly map those names under the application's `environment`. A Compose interpolation `.env` alone does not put every variable in the container.
+Set `command: ["node", "server.js"]` to change the container command, preserving its real arguments. The future relay form is `command: ["keyhouse", "run", "--", "node", "server.js"]`. Docker supports it, but the relay is not implemented yet. Install the CLI in the image before using it.
+Apply with `docker compose up -d --build --force-recreate <service>`. Recreating is required for changed environment variables; `restart` alone reuses the old environment. Verify the integration after the new container is healthy.
+Never run `docker compose config`, `docker inspect` or `docker exec ... env` into agent-visible output: they may reveal existing credentials. Do not bake secrets into image layers or build arguments. Use deployment metadata and Keyhouse usage for proof.
+Checked 2026-10-23: [environment variables](https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/), [service command](https://docs.docker.com/reference/compose-file/services/#command), [compose up](https://docs.docker.com/reference/cli/docker/compose/up/).
+# Fly.io
+There is no connector. Keyhouse records a placement; the agent must update Fly again for future rotation.
+Set `fly secrets set OPENAI_API_KEY=<proxy-key> OPENAI_BASE_URL=<gateway-url> --app <app> --stage`, then `fly deploy --app <app>`. Without `--stage`, setting secrets triggers a deployment immediately. Use the application's exact Fly app.
+Change the image's CMD, or the applicable `[processes]` entry in `fly.toml`, to change the start command. Fly supports long-running processes and a future `keyhouse run -- node server.js`, provided the CLI is in the image. The relay itself is not built yet.
+Never print existing secret values or dump process environments. `fly secrets list` shows names/digests, but do not substitute an SSH environment dump. Keep real tracked values in Fly secrets. Verify the new Machine's integration path and Keyhouse usage after deploying.
+Checked 2026-10-23: [secrets set](https://fly.io/docs/flyctl/secrets-set/), [process configuration](https://fly.io/docs/reference/configuration/), [deploy](https://fly.io/docs/flyctl/deploy/).
+# Render
+There is no Keyhouse connector. Record the placement; the agent must update Render again when a key rotates.
+Use the service's Environment page, add or edit `OPENAI_API_KEY` and `OPENAI_BASE_URL`, then choose Save, rebuild, and deploy. For a scripted update, `PUT https://api.render.com/v1/services/<service-id>/env-vars/<key>` changes one variable with a JSON `value` body. Pass authorization and value from a local process without printing either; discard the response.
+Do not use the collection `PUT /services/<id>/env-vars` for a single update: it replaces the entire variable list and deletes omitted variables. Never dump the existing list into an agent to reconstruct it.
+Change Start Command in Settings, or `startCommand` in the Blueprint. A web service or worker can run the future `keyhouse run -- node server.js`; the relay is not built yet. Static sites and functions cannot host that persistent relay.
+For an API update, trigger a deployment with `POST https://api.render.com/v1/services/<service-id>/deploys` and body `{}`. Variable API writes alone do not deploy. Use a local HTTP script with secret headers excluded from logs. Verify the deployed service's integration and Keyhouse usage.
+Checked 2026-10-23: [environment setup](https://render.com/docs/configure-environment-variables), [single-variable API](https://api-docs.render.com/reference/update-env-var), [collection replacement warning](https://api-docs.render.com/reference/update-env-vars-for-service), [deploy API](https://api-docs.render.com/reference/create-deploy), [startCommand](https://render.com/docs/blueprint-spec).
+# Vercel
+There is no connector yet. Record placements; the agent updates Vercel again for future rotation. Use the correct linked project and environment.
+Set a server-only variable with `vercel env add OPENAI_API_KEY production`, supplying its new proxy key through stdin. Set `OPENAI_BASE_URL` the same way. For an existing name use `vercel env update OPENAI_API_KEY production`. Supply values from a local process; do not print or echo existing values. The CLI also accepts stdin redirected from a file, but do not create plaintext temporary files for real secrets.
+Vercel functions have no persistent application start command. `keyhouse run` does not work there. Configure the SDK's base URL in code or env instead. Do not put keys in `NEXT_PUBLIC_`, `VITE_` or other browser-exposed variables.
+Deploy the updated code and environment with `vercel deploy --prod`. Editing an environment variable does not change an existing immutable deployment. Verify the integration through the newly deployed function and check Keyhouse usage.
+Never use `vercel env pull`, verbose diagnostics or an environment dump to bring existing secrets into agent output.
+Checked 2026-10-23: [env add/update](https://vercel.com/docs/cli/env), [deploy](https://vercel.com/docs/cli/deploy).
+# Cloudflare Workers
+There is no host connector. Record the placement; future rotation needs the agent to write the replacement again.
+Use `wrangler secret put OPENAI_API_KEY` and supply the new proxy key through stdin. For a named environment append `--env <environment>` consistently. Put a nonsecret `OPENAI_BASE_URL` under `vars` for that environment in `wrangler.jsonc`, or use `wrangler secret put OPENAI_BASE_URL` as well. Access these through the Worker `env` bindings and pass them to the SDK explicitly.
+Workers has no process start command. `keyhouse run` cannot run a local relay there. Use a base-URL client; a TCP or child-process workaround is not equivalent.
+Deploy changed code and vars with `wrangler deploy --env <environment>`. A normal `secret put` creates/deploys a version itself; coordinate it with the code deploy. `wrangler versions secret put` only uploads a version and requires a separate version deployment, so do not interchange those commands silently.
+Never print existing binding values, enable request-header dumps or return credentials from a diagnostic endpoint. Verify the deployed Worker's integration and Keyhouse usage.
+Checked 2026-10-23: [Wrangler secret/deploy commands](https://developers.cloudflare.com/workers/wrangler/commands/), [secret bindings](https://developers.cloudflare.com/workers/configuration/secrets/).
+# GitHub Actions
+There is no connector yet. Record the placement; future rotation needs another GitHub secret write.
+Set a repository secret with `gh secret set OPENAI_API_KEY --repo <owner/repo>` and supply the replacement through stdin. Set `OPENAI_BASE_URL` the same way, or use a repository variable for the nonsecret URL. Add `--env <environment>` for an environment secret and preserve that scope in the workflow.
+In the workflow step map `OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}` and `OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}` under `env`. Change its `run` command to the actual app command. A job can run the future `keyhouse run -- node server.js` after installing the CLI, but the relay is not built yet.
+Commit the workflow change through the normal review path. For a workflow supporting `workflow_dispatch`, start it with `gh workflow run <workflow> --repo <owner/repo> --ref <branch>`. This reruns work; it is not a persistent deployment by itself. Confirm its integration step and Keyhouse usage.
+Never enable shell tracing, print `env`, echo a secret expression, or rely only on GitHub's masking. Keep secrets out of job artifacts, caches and untrusted pull-request workflows.
+Checked 2026-10-23: [gh secret set](https://cli.github.com/manual/gh_secret_set), [gh workflow run](https://cli.github.com/manual/gh_workflow_run), [using Actions secrets](https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions).
+# Netlify
+There is no connector. Record the placement and update Netlify again when keys rotate.
+With the correct site linked, set `netlify env:set OPENAI_API_KEY <proxy-key> --context production` and `netlify env:set OPENAI_BASE_URL <gateway-url> --context production`. These new proxy values may be supplied by a local process. Do not use CLI arguments or temporary files to shuttle an existing real secret through an agent. Preserve the intended scopes and deployment context.
+Netlify functions have no persistent start command for `keyhouse run`. Use the SDK's base URL in server code. Build-command settings run builds, not a runtime relay. Never bundle secrets into browser code or commit them in `netlify.toml`.
+Run `netlify deploy --build --prod` to build and deploy the changed application. Environment changes require a fresh deployment. Exercise the function integration and check Keyhouse usage on that deployment.
+Never use `netlify env:list`, `env:get` or debug logs to expose existing values. Only names, types and success metadata belong in the agent's report.
+Checked 2026-10-23: [env:set](https://cli.netlify.com/commands/env/), [deploy](https://cli.netlify.com/commands/deploy/).
+# Heroku
+There is no connector. Record the placement; the agent must set replacements again when rotating.
+Set `heroku config:set OPENAI_API_KEY=<proxy-key> OPENAI_BASE_URL=<gateway-url> --app <app>`. Capture and discard stdout/stderr because config commands can echo values. Use only the newly issued proxy values in CLI arguments. Existing real secrets should remain in the host secret store and never pass through the agent's output.
+Change the Procfile to `web: node server.js` using the app's actual command. Heroku dynos can support a future `web: keyhouse run -- node server.js` when the CLI is installed, but the relay is not built yet.
+Config changes create a release and restart dynos. For code or Procfile changes, commit and deploy using `git push heroku HEAD:main` after verifying the remote targets the intended app. A config restart alone does not deploy unpushed code. Exercise the new release's integration and inspect Keyhouse usage.
+Never run `heroku config`, `config:get`, shell environment dumps or verbose request logging into agent-visible output. Report release metadata only.
+Checked 2026-10-23: [config vars](https://devcenter.heroku.com/articles/config-vars), [Procfile](https://devcenter.heroku.com/articles/procfile), [Git deploy](https://devcenter.heroku.com/articles/git).
+## OpenAI: openai
+Method: base_url. Checked 2026-10-23, version 7.43.0, commit 4c11b87c3e5e4fcddeeffc85b55502b2296f49fd.
+Reads: OPENAI_API_KEY, OPENAI_BASE_URL.
+```ts
+const ai = new OpenAI();
+```
+Reads both variables automatically. Explicit baseURL overrides the environment.
+- https://github.com/openai/openai-node/blob/4c11b87c3e5e4fcddeeffc85b55502b2296f49fd/src/client.ts
+## Anthropic: @anthropic-ai/sdk
+Method: base_url. Checked 2026-10-23, version 1.2.0, commit bc9cbb0a5bce1d50f2589e556f7e81f7fcbc4aab.
+Reads: ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL.
+```ts
+const ai = new Anthropic();
+```
+Base URL excludes /v1: resource paths already include /v1. Explicit API-key auth avoids other credential modes. Checked 1.2.0 apiKeyAuth sends Authorization: Bearer. The current proxy only accepts its x-api-key hint; verify against the destination engine before adopting this SDK version.
+- https://github.com/anthropics/anthropic-sdk-typescript/blob/bc9cbb0a5bce1d50f2589e556f7e81f7fcbc4aab/src/client.ts
+## Gemini: @google/genai
+Method: base_url. Checked 2026-10-23, version 2.31.0, commit 0dd787c23d76139982d7acb01e3c99978f563007.
+Reads: GOOGLE_API_KEY, GEMINI_API_KEY, GOOGLE_GEMINI_BASE_URL, GOOGLE_VERTEX_BASE_URL.
+```ts
+const ai = new GoogleGenAI({apiKey: process.env.GEMINI_API_KEY, httpOptions: {baseUrl: process.env.GEMINI_BASE_URL}});
+```
+GOOGLE_API_KEY wins over GEMINI_API_KEY when no explicit apiKey is supplied. GEMINI_BASE_URL in this snippet is application configuration. Node also reads GOOGLE_GEMINI_BASE_URL and GOOGLE_VERTEX_BASE_URL; explicit httpOptions.baseUrl wins.
+- https://github.com/googleapis/js-genai/blob/0dd787c23d76139982d7acb01e3c99978f563007/src/node/node_client.ts
+- https://github.com/googleapis/js-genai/blob/0dd787c23d76139982d7acb01e3c99978f563007/src/_base_url.ts
+## Groq: groq-sdk
+Method: base_url. Checked 2026-10-23, version 1.6.0, commit c0f7d7dea69659edb64486f4a53aea9ae541d957.
+Reads: GROQ_API_KEY, GROQ_BASE_URL.
+```ts
+const ai = new Groq();
+```
+Base URL excludes /openai/v1: generated resource paths contain it.
+- https://github.com/groq/groq-typescript/blob/c0f7d7dea69659edb64486f4a53aea9ae541d957/src/client.ts
+## Mistral: @mistralai/mistralai
+Method: base_url. Checked 2026-10-23, version 3.1.0, commit 422a7d664869e65e5f7ff45c0b5314a904d245af.
+Reads: no API credential/base-URL defaults.
+```ts
+const ai = new Mistral({apiKey: process.env.MISTRAL_API_KEY, serverURL: process.env.MISTRAL_BASE_URL});
+```
+Pass apiKey and serverURL explicitly. No distinctive published key prefix; automatic import refuses unrecognised shapes.
+- https://github.com/mistralai/client-ts/blob/422a7d664869e65e5f7ff45c0b5314a904d245af/src/lib/config.ts
+## DeepSeek: openai
+Method: base_url. Checked 2026-10-23, version 7.43.0, commit 4c11b87c3e5e4fcddeeffc85b55502b2296f49fd.
+Reads: OPENAI_API_KEY, OPENAI_BASE_URL.
+```ts
+const ai = new OpenAI({apiKey: process.env.DEEPSEEK_API_KEY, baseURL: process.env.DEEPSEEK_BASE_URL});
+```
+Uses the OpenAI-compatible client. DEEPSEEK_* are application variables, not defaults read by this SDK.
+- https://github.com/openai/openai-node/blob/4c11b87c3e5e4fcddeeffc85b55502b2296f49fd/src/client.ts
+## OpenRouter: openai
+Method: base_url. Checked 2026-10-23, version 7.43.0, commit 4c11b87c3e5e4fcddeeffc85b55502b2296f49fd.
+Reads: OPENAI_API_KEY, OPENAI_BASE_URL.
+```ts
+const ai = new OpenAI({apiKey: process.env.OPENROUTER_API_KEY, baseURL: process.env.OPENROUTER_BASE_URL});
+```
+Uses the OpenAI-compatible client. OPENROUTER_* are application variables; include /api/v1 in the base URL.
+- https://github.com/openai/openai-node/blob/4c11b87c3e5e4fcddeeffc85b55502b2296f49fd/src/client.ts
+## Resend: resend
+Method: base_url. Checked 2026-10-23, version 6.34.1, commit 794310314b0d55c3889fc11335dc35d068add424.
+Reads: RESEND_API_KEY, RESEND_BASE_URL.
+```ts
+const mail = new Resend();
+```
+Reads RESEND_BASE_URL when the client is constructed.
+- https://github.com/resend/resend-node/blob/794310314b0d55c3889fc11335dc35d068add424/src/resend.ts
+## Stripe: stripe
+Method: base_url. Checked 2026-10-23, version 23.0.1, commit 3af59f7c86a2350a8ea5298473f258d622bd8651.
+Reads: no API credential/base-URL defaults.
+```ts
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {host: process.env.STRIPE_HOST});
+```
+host only, no scheme or path. The SDK appends /v1 resource paths. Pass the key explicitly; this constructor does not validate sk_ prefixes.
+- https://github.com/stripe/stripe-node/blob/3af59f7c86a2350a8ea5298473f258d622bd8651/src/stripe.core.ts
+- https://github.com/stripe/stripe-node/blob/3af59f7c86a2350a8ea5298473f258d622bd8651/src/RequestSender.ts
+## Apify: apify-client
+Method: base_url. Checked 2026-10-23, version 2.25.1, commit f821cde7f3f906d4b91266230c10cbaa07bb1487.
+Reads: no API credential/base-URL defaults.
+```ts
+const apify = new ApifyClient({token: process.env.APIFY_TOKEN, baseUrl: process.env.APIFY_BASE_URL});
+```
+Pass token explicitly. baseUrl is normalized to include /v2.
+- https://github.com/apify/apify-client-js/blob/f821cde7f3f906d4b91266230c10cbaa07bb1487/src/apify_client.ts
+- https://github.com/apify/apify-client-js/blob/f821cde7f3f906d4b91266230c10cbaa07bb1487/src/utils.ts
+## ElevenLabs: @elevenlabs/elevenlabs-js
+Method: base_url. Checked 2026-10-23, version 2.74.0, commit b6b7b9082d4e5dc7fb85ccb2a7dcd7cb91458822.
+Reads: ELEVENLABS_API_KEY.
+```ts
+const voice = new ElevenLabsClient({apiKey: process.env.ELEVENLABS_API_KEY, baseUrl: process.env.ELEVENLABS_BASE_URL});
+```
+Uses xi-api-key. baseUrl is a constructor option; ELEVENLABS_BASE_URL is application configuration. No distinctive published key prefix; automatic import refuses unrecognised shapes.
+- https://github.com/elevenlabs/elevenlabs-js/blob/b6b7b9082d4e5dc7fb85ccb2a7dcd7cb91458822/src/BaseClient.ts
+- https://github.com/elevenlabs/elevenlabs-js/blob/b6b7b9082d4e5dc7fb85ccb2a7dcd7cb91458822/src/Client.ts
+## Twilio: twilio
+Method: run. Checked 2026-10-23, version 6.2.0, commit 1f261bdcf665bc50bc8ca5b67e407e723de07c68.
+Reads: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, HTTP_PROXY, TWILIO_CA_BUNDLE.
+```ts
+const sms = twilio();
+```
+Basic auth encodes AccountSid:AuthToken. Reads HTTP_PROXY. Prefer an API key/secret: the account auth token also signs incoming webhooks.
+- https://github.com/twilio/twilio-node/blob/1f261bdcf665bc50bc8ca5b67e407e723de07c68/src/base/RequestClient.ts
+- https://github.com/twilio/twilio-node/blob/1f261bdcf665bc50bc8ca5b67e407e723de07c68/src/base/BaseTwilio.ts
+## Stripe webhook signing secret: stripe
+Method: track_rotate. Checked 2026-10-23, version 23.0.1, commit 3af59f7c86a2350a8ea5298473f258d622bd8651.
+Reads: no API credential/base-URL defaults.
+```ts
+stripe.webhooks.constructEvent(rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET);
+```
+Verification needs the real signing secret on the host. Never replace it with a kh_ key. Rotate in Stripe and update every placement.
+- https://github.com/stripe/stripe-node/blob/3af59f7c86a2350a8ea5298473f258d622bd8651/src/Webhooks.ts
+## Database connection URL: pg
+Method: track_rotate. Checked 2026-10-23, version 8.23.1, commit 2a5850fb0db18f5e40a642bbb4a4743de412ab54.
+Reads: PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE, PGSSLMODE.
+```ts
+const pool = new Pool({connectionString: process.env.DATABASE_URL});
+```
+DATABASE_URL is passed explicitly. This TCP credential stays on the host. Track its placement and rotate it; do not substitute an HTTP proxy key.
+- https://github.com/brianc/node-postgres/blob/2a5850fb0db18f5e40a642bbb4a4743de412ab54/packages/pg/lib/connection-parameters.js

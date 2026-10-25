@@ -1,0 +1,65 @@
+[
+  {
+    "slug": "stripe-webhook",
+    "name": "Stripe webhook signing secret",
+    "variable": "STRIPE_WEBHOOK_SECRET",
+    "keyPatternsDistinctive": true,
+    "keyPatterns": [
+      "^whsec_[A-Za-z0-9]{16,}$"
+    ],
+    "sdks": [
+      {
+        "package": "stripe",
+        "language": "typescript",
+        "method": "track_rotate",
+        "env": [],
+        "configuration": {},
+        "snippet": "stripe.webhooks.constructEvent(rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET);",
+        "quirks": [
+          "Verification needs the real signing secret on the host. Never replace it with a kh_ key. Rotate in Stripe and update every placement."
+        ],
+        "checkedVersion": "23.0.1",
+        "checkedCommit": "3af59f7c86a2350a8ea5298473f258d622bd8651",
+        "checkedAt": "2026-10-23",
+        "sources": [
+          "https://github.com/stripe/stripe-node/blob/3af59f7c86a2350a8ea5298473f258d622bd8651/src/Webhooks.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "database-url",
+    "name": "Database connection URL",
+    "variable": "DATABASE_URL",
+    "keyPatternsDistinctive": true,
+    "keyPatterns": [
+      "^postgres(?:ql)?://[^\\s]+$"
+    ],
+    "sdks": [
+      {
+        "package": "pg",
+        "language": "typescript",
+        "method": "track_rotate",
+        "env": [
+          "PGHOST",
+          "PGPORT",
+          "PGUSER",
+          "PGPASSWORD",
+          "PGDATABASE",
+          "PGSSLMODE"
+        ],
+        "configuration": {},
+        "snippet": "const pool = new Pool({connectionString: process.env.DATABASE_URL});",
+        "quirks": [
+          "DATABASE_URL is passed explicitly. This TCP credential stays on the host. Track its placement and rotate it; do not substitute an HTTP proxy key."
+        ],
+        "checkedVersion": "8.23.1",
+        "checkedCommit": "2a5850fb0db18f5e40a642bbb4a4743de412ab54",
+        "checkedAt": "2026-10-23",
+        "sources": [
+          "https://github.com/brianc/node-postgres/blob/2a5850fb0db18f5e40a642bbb4a4743de412ab54/packages/pg/lib/connection-parameters.js"
+        ]
+      }
+    ]
+  }
+]
